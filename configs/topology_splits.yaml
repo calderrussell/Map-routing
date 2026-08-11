@@ -1,0 +1,6 @@
+# Split topologies before scenario generation. Test entries must never be used for tuning.
+development: [braess, tiny_grid]
+train: [synthetic_grid_3x3, synthetic_diamond, sioux_falls]
+validation: [synthetic_grid_4x4, eastern_massachusetts]
+test: [anaheim, winnipeg]
+

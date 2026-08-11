@@ -1,0 +1,1126 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,longtable,tabularx,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\usepackage[numbers,sort&compress]{natbib}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=green!35!black,
+  urlcolor=blue!65!black,
+  pdftitle={A Graph Neural Surrogate for Dynamic System-Optimal Traffic Assignment},
+  pdfauthor={Research design document}
+}
+
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\V}{\mathcal{V}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\K}{\mathcal{K}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Eop}{\mathbb{E}}
+\newcommand{\ind}{\mathbb{I}}
+\newcommand{\relu}{\operatorname{ReLU}}
+\newcommand{\softplus}{\operatorname{softplus}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\poa}{\operatorname{PoA}}
+\newcommand{\gap}{\operatorname{Gap}}
+\newcommand{\vect}[1]{\bm{#1}}
+\newcommand{\trans}{\mathsf{T}}
+
+\title{\textbf{A Graph Neural Surrogate for Dynamic System-Optimal Traffic Assignment}\\
+\large Model Design, Training Pipeline, and Reproducible Evaluation Protocol}
+\author{Research design document}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document specifies how to build and evaluate a graph-neural surrogate for dynamic
+system-optimal traffic assignment (DSO-DTA).  The proposed system is not a generic
+traffic forecaster.  It is a decision model that maps a road network, current traffic
+state, time-varying origin--destination demand, and disruptions to feasible routing
+decisions intended to minimize total system travel time.  The recommended design uses
+a cell-transmission-model oracle to generate system-optimal demonstrations, a
+heterogeneous spatio-temporal graph neural network to represent roads and long-range
+origin--destination interactions, and a differentiable feasibility projection to
+enforce conservation and capacity constraints.  Supervised imitation is followed by
+decision-focused fine-tuning through a differentiable or simulation-based traffic
+rollout.  The protocol distinguishes interpolation from genuine generalization by
+holding out complete network topologies, demand regimes, and incident patterns.  It
+also compares the surrogate with user equilibrium, marginal-cost assignment,
+model-predictive control, and the exact oracle.  The resulting study is designed to
+test whether expensive repeated DSO optimization can be replaced by fast inference
+without hiding infeasibility, instability, unfairness, or simulator mismatch.
+\end{abstract}
+
+\noindent\textbf{Status of this document.}
+This is a research and implementation blueprint, not a report of completed
+experiments.  Numerical thresholds described below are proposed evaluation targets;
+they must not be presented as empirical findings until the experiments are run.
+
+\tableofcontents
+
+\section{Research objective and scope}
+
+The motivating phenomenon is the difference between individually rational routing and
+the social optimum.  Wardrop's first principle describes a user equilibrium (UE), in
+which no traveler can improve their own experienced cost by changing routes, while
+Wardrop's second principle describes a system optimum (SO), in which average or total
+travel cost is minimized \citep{wardrop1952}.  The two need not coincide.  This
+inefficiency is commonly summarized by the price of anarchy, and it can be substantial
+in congested transportation models \citep{roughgarden2002,youn2008}.
+
+The proposed research asks:
+
+\begin{quote}
+Can a graph neural network approximate the first control action of a dynamic
+system-optimal traffic assignment solver on previously unseen demand profiles,
+incidents, and road-network topologies, while maintaining physical feasibility and a
+small total-travel-time optimality gap?
+\end{quote}
+
+The central engineering use case is a navigation platform or traffic-management center
+that periodically recommends routes to a controlled population.  The initial paper
+should study \emph{routing only}: traffic signals, departure-time control, pricing,
+and strategic non-compliance should be left fixed or treated as extensions.  Combining
+all of them in the first model would make attribution and theoretical analysis
+unnecessarily difficult.
+
+\subsection{Precise intended contribution}
+
+The intended contribution has four parts:
+
+\begin{enumerate}[label=\textbf{C\arabic*:},leftmargin=2.8em]
+  \item A receding-horizon DSO-DTA oracle based on the cell transmission model (CTM),
+  used to generate training decisions and an upper-performance reference.
+  \item A heterogeneous spatio-temporal GNN that represents physical road cells,
+  intersection movements, and virtual origin--destination (OD) relations.
+  \item A feasibility mechanism---preferably a differentiable projection---that
+  enforces nonnegativity, movement capacities, conservation, and admissible turns.
+  \item A topology-held-out evaluation that reports decision quality, physical
+  feasibility, runtime, robustness, and the fraction of the price-of-anarchy gap
+  recovered by the learned controller.
+\end{enumerate}
+
+Traffic-assignment surrogates based on graph neural networks already exist.
+Prior work has learned static equilibrium flows from OD demand \citep{rahman2023},
+incorporated heterogeneous OD links and conservation penalties for static UE
+assignment \citep{liu2024hetgat}, and modeled spatio-temporal flows from OD demand
+\citep{liu2024hstgsn}.  Consequently, ``using a GNN for traffic assignment'' is not a
+sufficient novelty claim.  The defensible gap is the combination of dynamic
+\emph{system-optimal control}, hard or explicitly measured feasibility, decision-focused
+training, and genuine unseen-topology testing.
+
+\section{Traffic-assignment foundations}
+
+\subsection{Network, commodities, and demand}
+
+Let the directed road network be
+\(
+  \G=(\V,\E)
+\), where intersections or cell boundaries are nodes and directed road segments are
+edges.  Let \(\K\) index OD commodities.  Commodity \(k\in\K\) has origin \(o_k\),
+destination \(d_k\), and exogenous departure demand \(r_k(t)\) during discrete time
+interval \(t\in\T=\{0,\ldots,H-1\}\).  The interval length is \(\Delta t\).
+
+For static exposition, let \(x_e^k\geq 0\) be the flow of commodity \(k\) on link
+\(e\), and \(x_e=\sum_k x_e^k\).  The node--arc incidence matrix is
+\(B\in\{-1,0,1\}^{|\V|\times|\E|}\).  Static feasibility can be written
+
+\begin{equation}
+  B\vect{x}^k = \vect{b}^k,
+  \qquad
+  \vect{x}^k\geq \vect{0},
+  \label{eq:static-conservation}
+\end{equation}
+
+where \(b_v^k\) is positive at the origin, negative at the destination, and zero at
+intermediate nodes, under the selected incidence convention.
+
+\subsection{Static user equilibrium and system optimum}
+
+A common separable link travel-time model is the Bureau of Public Roads (BPR) form
+
+\begin{equation}
+  \tau_e(x_e)
+  = \tau_e^0
+  \left[
+    1+\alpha_e\left(\frac{x_e}{c_e}\right)^{\beta_e}
+  \right],
+  \label{eq:bpr}
+\end{equation}
+
+where \(\tau_e^0\) is free-flow travel time and \(c_e\) is nominal capacity.  Under
+standard monotonicity and separability conditions, the Beckmann transformation writes
+the UE as the convex program \citep{beckmann1956}
+
+\begin{equation}
+  \vect{x}^{\mathrm{UE}}
+  \in
+  \argmin_{\vect{x}\in\mathcal{F}}
+  \sum_{e\in\E}
+  \int_0^{x_e}\tau_e(z)\,\mathrm{d}z,
+  \label{eq:ue}
+\end{equation}
+
+where \(\mathcal{F}\) is the multicommodity feasible-flow set.  The static SO instead
+solves
+
+\begin{equation}
+  \vect{x}^{\mathrm{SO}}
+  \in
+  \argmin_{\vect{x}\in\mathcal{F}}
+  C(\vect{x}),
+  \qquad
+  C(\vect{x}) = \sum_{e\in\E} x_e\tau_e(x_e).
+  \label{eq:so}
+\end{equation}
+
+For differentiable link costs, the marginal social cost is
+
+\begin{equation}
+  m_e(x_e)
+  = \frac{\mathrm{d}}{\mathrm{d}x_e}
+    \big[x_e\tau_e(x_e)\big]
+  = \tau_e(x_e)+x_e\tau'_e(x_e).
+  \label{eq:marginal-cost}
+\end{equation}
+
+This identity motivates one possible neural output: a learned, time-dependent
+generalization of the external congestion term \(x_e\tau'_e(x_e)\).  Static UE and SO
+can be solved with algorithms based on Frank--Wolfe and related traffic-assignment
+methods \citep{frank1956,patriksson1994}.  A neural surrogate is therefore most
+valuable in the dynamic, repeatedly solved setting rather than as a replacement for a
+single moderate-sized static assignment.
+
+The conventional static price of anarchy is
+
+\begin{equation}
+  \poa = \frac{C(\vect{x}^{\mathrm{UE}})}
+                   {C(\vect{x}^{\mathrm{SO}})} \geq 1.
+  \label{eq:poa}
+\end{equation}
+
+For a learned policy \(\pi_\theta\), a more informative normalized quantity is the
+fraction of the avoidable gap that remains:
+
+\begin{equation}
+  \gap(\pi_\theta)
+  = \frac{C(\pi_\theta)-C(\mathrm{SO})}
+         {C(\mathrm{UE})-C(\mathrm{SO})+\varepsilon}.
+  \label{eq:gap}
+\end{equation}
+
+Values near zero indicate that the controller closes most of the UE--SO gap.  Values
+above one indicate performance worse than UE.  A value below zero is not credible
+unless the policy and oracle were evaluated under different feasible sets, stochastic
+realizations, or solver tolerances; such a result should trigger an audit rather than
+an optimality claim.
+
+\subsection{Why the dynamic problem is different}
+
+Dynamic traffic assignment adds departure time, queue propagation, storage capacity,
+spillback, and time-dependent route interaction.  A route decision at time \(t\) can
+change downstream congestion many intervals later.  The dynamic SO problem therefore
+cannot generally be reduced to independent shortest-path calculations using current
+travel times.  Reviews of DTA distinguish analytical, simulation-based, and
+variational-inequality formulations \citep{peeta2001}.
+
+The CTM discretizes the kinematic-wave traffic model into conservation equations that
+represent the formation, propagation, and dissipation of queues
+\citep{daganzo1994,daganzo1995}.  CTM formulations have also been used to express
+single-destination SO-DTA as a linear program \citep{ziliaskopoulos2000}.  This makes
+CTM an appropriate initial oracle: it is substantially more realistic than a static
+BPR assignment while remaining easier to optimize and differentiate through than a
+microscopic simulator.
+
+\section{Dynamic system-optimal oracle}
+
+\subsection{Cell graph and state variables}
+
+Split each sufficiently long road link into cells.  Let \(\mathcal{C}\) be the set of
+cells and \(\mathcal{M}\subseteq\mathcal{C}\times\mathcal{C}\) the allowed directed
+cell movements.  For cell \(i\), define:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \(N_i\): maximum vehicle storage;
+  \item \(F_i\): maximum flow per interval;
+  \item \(v_i\): free-flow sending coefficient;
+  \item \(w_i\): backward-wave receiving coefficient;
+  \item \(n_i^k(t)\): number of commodity-\(k\) vehicles in cell \(i\);
+  \item \(y_{ij}^k(t)\): commodity-\(k\) flow from cell \(i\) to \(j\).
+\end{itemize}
+
+Total occupancy and movement flow are
+\(
+  n_i(t)=\sum_k n_i^k(t)
+\)
+and
+\(
+  y_{ij}(t)=\sum_k y_{ij}^k(t)
+\).
+The multicommodity conservation equation is
+
+\begin{equation}
+  n_i^k(t+1)
+  = n_i^k(t)
+  + a_i^k(t)
+  + \sum_{j:(j,i)\in\mathcal{M}}y_{ji}^k(t)
+  - \sum_{j:(i,j)\in\mathcal{M}}y_{ij}^k(t)
+  - z_i^k(t),
+  \label{eq:ctm-conservation}
+\end{equation}
+
+where \(a_i^k(t)\) is admitted exogenous demand and \(z_i^k(t)\) is destination exit
+flow.  If entry demand can queue outside the modeled network, introduce source queues
+\(q_k^{\mathrm{src}}(t)\) rather than silently dropping vehicles.
+
+For a triangular fundamental diagram, sending and receiving envelopes can be written
+
+\begin{align}
+  S_i(t) &= \min\{v_i n_i(t),F_i(t)\},
+  \\
+  R_i(t) &= \min\{w_i[N_i-n_i(t)],F_i(t)\}.
+  \label{eq:ctm-sr}
+\end{align}
+
+An incident changes \(F_i(t)\), \(v_i(t)\), or the set of allowed movements.  At each
+interval, total movement flows obey
+
+\begin{align}
+  \sum_{j:(i,j)\in\mathcal{M}} y_{ij}(t)
+    &\leq S_i(t),
+  \\
+  \sum_{i:(i,j)\in\mathcal{M}} y_{ij}(t)
+    &\leq R_j(t),
+  \\
+  y_{ij}^k(t)&\geq 0.
+  \label{eq:ctm-capacity}
+\end{align}
+
+Merge priorities, lane groups, signal phases, and node conflicts can be added as linear
+or mixed-integer constraints.  For the first routing-only paper, signal timing should
+be held fixed and represented as a known time-dependent movement capacity.
+
+\subsection{Objective}
+
+By discrete-time vehicle accounting, total system travel time over the horizon can be
+approximated by accumulated occupancy:
+
+\begin{equation}
+  J_{\mathrm{TSTT}}
+  = \Delta t\sum_{t=0}^{H-1}
+      \left[
+        \sum_{i\in\mathcal{C}}n_i(t)
+        + \sum_{k\in\K}q_k^{\mathrm{src}}(t)
+      \right].
+  \label{eq:tstt}
+\end{equation}
+
+The source queues must be counted; otherwise a controller can appear effective by
+refusing to admit vehicles.  A practical finite-horizon objective is
+
+\begin{equation}
+  J = J_{\mathrm{TSTT}}
+      + \lambda_{\mathrm{term}}
+        \sum_i \omega_i n_i(H)
+      + \lambda_{\mathrm{switch}}J_{\mathrm{switch}}
+      + \lambda_{\mathrm{fair}}J_{\mathrm{fair}},
+  \label{eq:full-objective}
+\end{equation}
+
+where the terminal penalty approximates cost beyond the horizon, the switching term
+discourages excessive route changes, and the optional fairness term controls disparate
+detours.  For the core surrogate paper, set \(\lambda_{\mathrm{fair}}=0\) during the
+primary experiments and report fairness as an outcome; adding a fairness objective is
+a natural follow-up study.
+
+\subsection{Receding-horizon oracle}
+
+At decision time \(t\), the oracle receives current state \(\vect{s}_t\), a demand
+forecast \(\widehat{\vect{r}}_{t:t+H-1}\), and predicted capacities.  It solves
+
+\begin{equation}
+  \vect{u}_{t:t+H-1}^{\star}
+  \in
+  \argmin_{\vect{u},\vect{n},\vect{y}} J
+  \quad\text{subject to \cref{eq:ctm-conservation,eq:ctm-capacity} and node constraints.}
+  \label{eq:oracle}
+\end{equation}
+
+Only the first decision \(\vect{u}_t^\star\) is applied; the problem is re-solved at
+the next control interval using new observations.  The GNN should initially learn this
+first-action mapping:
+
+\begin{equation}
+  \pi^\star:
+  (\G,\vect{s}_t,\widehat{\vect{r}}_{t:t+H-1},\vect{c}_{t:t+H-1})
+  \mapsto \vect{u}_t^\star.
+  \label{eq:first-action-map}
+\end{equation}
+
+This is preferable to predicting an entire open-loop horizon because later oracle
+actions depend on states that will differ once the surrogate makes an error.
+
+\section{What the neural model should output}
+
+There are three credible output parameterizations.  The first is recommended for the
+initial implementation.
+
+\subsection{Recommended: local movement split logits}
+
+For each commodity \(k\), cell or node \(i\), and admissible outgoing movement
+\((i,j)\), the network emits a logit \(\ell_{ij}^k(t)\).  A masked softmax gives
+
+\begin{equation}
+  p_{ij}^k(t)
+  = \frac{\exp(\ell_{ij}^k(t))\ind[(i,j)\in\mathcal{M}_k]}
+  {\sum_{h:(i,h)\in\mathcal{M}_k}\exp(\ell_{ih}^k(t))},
+  \label{eq:turn-softmax}
+\end{equation}
+
+where \(\mathcal{M}_k\) excludes illegal movements and edges from which destination
+\(d_k\) is unreachable.  The split proportions determine desired movement flows; a
+node allocator or projection reduces them when sending or receiving capacity binds.
+
+Advantages are a variable-size output, local feasibility of the probability simplex,
+and compatibility with closed-loop CTM simulation.  The main danger is cycling.
+Mitigate it with destination potentials, reachability masks, expected remaining-time
+features, and a loop penalty during rollouts.
+
+\subsection{Alternative: learned marginal edge costs}
+
+The model can output a nonnegative externality
+
+\begin{equation}
+  \widehat{\xi}_e^k(t)
+  = \softplus(g_\theta(\vect{h}_e,\vect{h}_k,\vect{h}_t)),
+  \qquad
+  \widehat{m}_e^k(t)=\widehat{\tau}_e(t)+\widehat{\xi}_e^k(t).
+  \label{eq:learned-cost}
+\end{equation}
+
+Time-dependent shortest paths or a differentiable soft shortest-path layer then turn
+these costs into route probabilities.  This form is interpretable as a learned dynamic
+marginal cost, but dynamic externalities depend on future queue propagation, so they
+need not equal the static expression in \cref{eq:marginal-cost}.
+
+\subsection{Alternative: full multicommodity flows}
+
+The network may directly predict \(\widetilde y_{ij}^k(t)\) for an entire horizon.
+This makes supervision simple but creates a large tensor and substantial feasibility
+burden.  It is useful as an offline speed benchmark, not the preferred deployed
+controller.
+
+\section{Heterogeneous spatio-temporal graph architecture}
+
+\subsection{Graph schema}
+
+Use a heterogeneous graph with the entity and relation types in
+\cref{tab:heterograph}.  Virtual OD entities are important because an origin and its
+destination may be many message-passing hops apart.  Prior traffic-assignment GNNs
+have used virtual OD links for this purpose \citep{liu2024hetgat,liu2024hstgsn}.
+
+\begin{table}[ht]
+\centering
+\caption{Recommended heterogeneous graph schema.}
+\label{tab:heterograph}
+\begin{tabularx}{\textwidth}{@{}p{0.18\textwidth}p{0.30\textwidth}X@{}}
+\toprule
+Entity/relation & Examples & Purpose \\
+\midrule
+Physical cell & occupancy, storage, flow limit, length, speed, lanes & Represents traffic state and local road physics. \\
+Intersection & phase, movement conflicts, aggregate pressure & Represents junction-specific constraints. \\
+OD token & origin, destination, departure forecast, remaining demand & Represents a variable number of commodities. \\
+Cell adjacency & upstream/downstream, turn type, movement capacity & Propagates local congestion and spillback information. \\
+OD-to-origin & injection relation & Communicates demand to its entry region. \\
+Destination-to-OD & attraction/reachability relation & Communicates destination context over long ranges. \\
+Global token & time of day, weather, network-level demand, incident count & Provides scenario context without forcing many graph hops. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Features and normalization}
+
+All continuous features should have a physical interpretation and preferably be
+normalized by a local scale.  This improves transfer across networks.
+
+\begin{longtable}{@{}p{0.24\textwidth}p{0.69\textwidth}@{}}
+\caption{Candidate input features.}\label{tab:features}\\
+\toprule
+Feature group & Recommended features \\
+\midrule
+\endfirsthead
+\toprule
+Feature group & Recommended features \\
+\midrule
+\endhead
+Cell state & \(n_i/N_i\), recent inflow and outflow divided by \(F_i\), speed/free-flow speed, travel-time/free-flow-time, source-queue indicator. \\
+Cell geometry & normalized length, lane count, road class, free-flow time, storage, nominal capacity, geographic bearing encoded by sine and cosine. \\
+Incident state & capacity multiplier, speed multiplier, closure flag, elapsed incident time, uncertain duration summary. \\
+Intersection state & current phase or fixed phase schedule, turn type, conflicting-flow indicator, movement saturation rate. \\
+OD state & departures in each forecast interval, unserved demand, origin and destination roles, free-flow OD time, demand relative to nearby capacity. \\
+Temporal context & sine/cosine time-of-day, day type, forecast lead time, previous control action. \\
+Global context & total active demand, network mean occupancy, fraction of disabled capacity, forecast confidence. \\
+\bottomrule
+\end{longtable}
+
+Avoid per-network z-score normalization computed from a test topology: it can leak test
+statistics and makes deployment dependent on future observations.  Ratios such as
+occupancy/storage and flow/capacity are more portable.  Training-set global transforms
+may be used for heavy-tailed features such as OD demand.
+
+\subsection{Encoder, message passing, and temporal state}
+
+Each entity type \(r\) receives a separate encoder
+
+\begin{equation}
+  \vect{h}_v^{(0)}
+  = \phi_r(\vect{x}_v),
+  \qquad v\text{ has type }r.
+\end{equation}
+
+At spatial layer \(\ell\), relation-specific messages are aggregated:
+
+\begin{align}
+  \vect{m}_{u\rightarrow v}^{(\ell,r)}
+    &= \psi_r^{(\ell)}
+       (\vect{h}_u^{(\ell)},\vect{h}_v^{(\ell)},\vect{e}_{uv}),
+  \\
+  \vect{m}_v^{(\ell)}
+    &= \sum_r\sum_{u\in\mathcal{N}_r(v)}
+       \alpha_{uv}^{(\ell,r)}\vect{m}_{u\rightarrow v}^{(\ell,r)},
+  \\
+  \vect{h}_v^{(\ell+1)}
+    &= \operatorname{LayerNorm}
+       \left[
+         \vect{h}_v^{(\ell)}
+         + \rho^{(\ell)}(\vect{m}_v^{(\ell)})
+       \right].
+  \label{eq:message-passing}
+\end{align}
+
+The attention coefficient \(\alpha_{uv}\) may depend on relation, congestion, and OD
+context.  Residual connections and normalization reduce optimization difficulty.
+Graph attention is not itself the research contribution; it is an implementation
+choice motivated by variable neighborhood importance \citep{velickovic2018}.
+
+For temporal information, apply the spatial encoder to each of the last \(L\) observed
+states and pass entity embeddings through a gated recurrent unit, temporal convolution,
+or causal Transformer.  Begin with a GRU because it is easier to train and cheaper than
+a large Transformer.  Forecast OD tokens can use a second temporal encoder over the
+future horizon.  Fuse observed state and forecasts using cross-attention or gated
+concatenation.
+
+\subsection{Commodity scaling}
+
+A direct \(|\K|\times|\mathcal{M}|\) representation may be too large when every OD pair
+is a commodity.  Evaluate three scaling strategies:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Destination batching:} run one destination-conditioned policy for a
+  batch of destinations and share the physical graph encoder.
+  \item \textbf{OD token sparsification:} instantiate tokens only for OD pairs with
+  positive demand in the current horizon.
+  \item \textbf{Regional aggregation:} group nearby destinations for upper-level
+  guidance, then use conventional local routing inside each region.
+\end{enumerate}
+
+The paper should report memory and runtime as both network size and active commodity
+count increase.  Hiding commodity growth behind a small benchmark would undermine the
+scalability claim.
+
+\section{Hard feasibility and differentiable projection}
+
+A conservation penalty alone does not guarantee a usable routing action.  The preferred
+design is to transform neural proposals into the nearest feasible action.  Let
+\(\widetilde{\vect{y}}_t\) be proposed movement flows.  Define
+
+\begin{equation}
+  \vect{y}_t^{\mathrm{proj}}
+  = \argmin_{\vect{y}}
+      \frac{1}{2}
+      \left\|W_t(\vect{y}-\widetilde{\vect{y}}_t)\right\|_2^2
+  \quad\text{subject to}\quad
+  A_t\vect{y}=\vect{b}_t,
+  \quad
+  G_t\vect{y}\leq\vect{h}_t,
+  \quad
+  \vect{y}\geq\vect{0}.
+  \label{eq:projection}
+\end{equation}
+
+The equalities encode commodity conservation or desired outflow allocation; the
+inequalities encode sending, receiving, and movement limits.  Slack variables with a
+large, reported penalty are preferable to infeasibility when source demand exceeds
+capacity.  Differentiable optimization layers permit gradients through structured
+convex programs \citep{amos2017,agrawal2019}.
+
+Two cautions are essential:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Projection can dominate runtime.  Report both raw GNN inference and end-to-end
+  inference including the projection and route decomposition.
+  \item Projection can hide a poor network.  Report the normalized correction
+  \(
+  \|\vect{y}^{\mathrm{proj}}-\widetilde{\vect{y}}\|/
+  (\|\vect{y}^{\mathrm{proj}}\|+\varepsilon)
+  \)
+  and the raw violation rates.
+\end{enumerate}
+
+If the projection is too costly, use a hierarchy: masked softmax for local split
+simplexes, an exact CTM node allocator for capacities, and a conservation correction
+only at source and sink boundaries.  This is faster but supplies weaker guarantees.
+
+\section{Dataset construction}
+
+\subsection{Networks}
+
+Use a curriculum that combines synthetic and established research networks.  The
+Transportation Networks for Research collection includes Braess, Sioux Falls, Anaheim,
+Eastern Massachusetts, Chicago, Winnipeg, and other traffic-assignment instances
+\citep{transportationNetworks}.  A recommended partition is:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Development:} Braess networks and small grids for debugging.
+  \item \textbf{Training:} procedurally generated planar networks plus a subset of
+  medium benchmark networks.
+  \item \textbf{Validation:} entire synthetic graph families and at least one complete
+  real benchmark topology excluded from training.
+  \item \textbf{Test:} complete topologies never used for model selection, including a
+  larger network than any training graph if computationally possible.
+\end{itemize}
+
+Split by topology \emph{before} generating demand scenarios.  Randomly splitting
+scenarios from the same topology across train and test measures interpolation, not
+topological generalization.
+
+\subsection{Dynamic OD demand}
+
+Static TNTP matrices can seed time-varying demand.  For base OD volume \(D_k\), sample
+
+\begin{equation}
+  r_k(t)
+  = D_k\,s(t;\vect{\eta})\,\zeta_k(t),
+  \label{eq:demand}
+\end{equation}
+
+where \(s(t;\vect{\eta})\) is a normalized profile with one or more peaks and
+\(\zeta_k(t)\) is a correlated multiplicative disturbance.  Include:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item low, near-capacity, and oversaturated demand;
+  \item narrow and broad peaks;
+  \item spatially correlated event demand;
+  \item demand shifts toward OD pairs rare or absent in training;
+  \item forecast error distinct from realized demand.
+\end{itemize}
+
+Record the random seed, complete demand tensor, and forecast supplied to each method.
+All compared policies must face the same realized demand.
+
+\subsection{Incident generation}
+
+An incident scenario is described by affected cells, start time, duration, capacity
+multiplier, and observation delay.  Separate incident sets into:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item familiar severities at unfamiliar locations;
+  \item severities outside the training range;
+  \item multiple interacting incidents;
+  \item complete closures that change reachability;
+  \item sensor-reported incidents with noisy duration forecasts.
+\end{enumerate}
+
+Recent robustness studies show that learned and pressure-based traffic controllers can
+degrade under incident-driven distribution shift, motivating explicit disruption tests
+rather than assuming nominal generalization \citep{nguyen2025trex}.
+
+\subsection{Oracle demonstration generation}
+
+For each scenario:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Build or load the cell graph and verify reachability for every active OD pair.
+  \item Sample realized demand, the forecast visible to the controller, and incidents.
+  \item Initialize traffic with a documented warm-up policy.
+  \item At each control time, solve the DSO receding-horizon problem.
+  \item Store the pre-decision state, forecast, capacities, first oracle action,
+  objective value, dual variables when available, and solver diagnostics.
+  \item Apply the oracle action to the CTM, advance one control interval, and repeat.
+  \item Reject or flag demonstrations with unacceptable primal residual, duality gap,
+  or time limit.
+\end{enumerate}
+
+Do not treat a timed-out incumbent as exactly optimal.  Store a lower bound when the
+solver supplies one, and label each sample with its certified optimality gap.  Samples
+may be weighted by solution confidence.
+
+\section{Training objectives}
+
+\subsection{Stage 1: supervised imitation}
+
+Let \(\vect{u}_t^\star\) be the oracle action and
+\(\widehat{\vect{u}}_t=\pi_\theta(\cdot)\) the projected model action.  A normalized
+Huber or absolute loss is less sensitive to a small number of high-flow movements than
+unscaled squared error:
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{imit}}
+  = \frac{1}{|\mathcal{B}|}
+    \sum_{b\in\mathcal{B}}
+    \sum_{m,k}
+    \omega_{mk}^{(b)}
+    \operatorname{Huber}
+    \left(
+      \frac{\widehat u_{mk}^{(b)}-u_{mk}^{\star(b)}}
+           {F_m^{(b)}+\varepsilon}
+    \right).
+  \label{eq:imitation}
+\end{equation}
+
+Flow labels may be non-unique: two different assignments can have almost identical
+system cost.  Consequently, imitation error must not be the primary final metric.
+
+\subsection{Physics residuals}
+
+When the model predicts full flows or states, add
+
+\begin{align}
+  \mathcal{L}_{\mathrm{cons}}
+    &= \sum_{i,k,t}
+       \left|
+       \widehat n_i^k(t+1)-\widehat n_i^k(t)-a_i^k(t)
+       -\sum_j\widehat y_{ji}^k(t)
+       +\sum_j\widehat y_{ij}^k(t)
+       +\widehat z_i^k(t)
+       \right|,
+  \\
+  \mathcal{L}_{\mathrm{cap}}
+    &= \sum_{i,t}
+       \relu\!\left(\sum_j\widehat y_{ij}(t)-S_i(t)\right)
+       + \sum_{j,t}
+       \relu\!\left(\sum_i\widehat y_{ij}(t)-R_j(t)\right),
+  \\
+  \mathcal{L}_{\mathrm{loop}}
+    &= \sum_{k,t}\text{predicted recirculating flow for commodity }k.
+  \label{eq:physics-losses}
+\end{align}
+
+If hard projection is used, these losses are still useful on raw outputs so that the
+network learns not to rely on projection.
+
+\subsection{Stage 2: decision-focused fine-tuning}
+
+Unroll the projected policy through a differentiable CTM or a simulator interface for
+\(H_{\mathrm{train}}\) intervals.  Minimize normalized decision regret
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{decision}}
+  = \frac{J(\pi_\theta)-J(\pi^\star)}
+         {|J(\pi^\star)|+\varepsilon}.
+  \label{eq:decision-loss}
+\end{equation}
+
+The complete objective is
+
+\begin{equation}
+  \mathcal{L}
+  = \lambda_{\mathrm{imit}}\mathcal{L}_{\mathrm{imit}}
+  + \lambda_{\mathrm{dec}}\mathcal{L}_{\mathrm{decision}}
+  + \lambda_{\mathrm{cons}}\mathcal{L}_{\mathrm{cons}}
+  + \lambda_{\mathrm{cap}}\mathcal{L}_{\mathrm{cap}}
+  + \lambda_{\mathrm{loop}}\mathcal{L}_{\mathrm{loop}}
+  + \lambda_{\mathrm{proj}}\mathcal{L}_{\mathrm{projection}}.
+  \label{eq:total-loss}
+\end{equation}
+
+Start with imitation and short rollouts, then gradually increase rollout length and
+decision-loss weight.  This curriculum reduces exploding gradients and distribution
+shift from compounding policy errors.  If the traffic simulator is nondifferentiable,
+use imitation plus reinforcement learning, a learned differentiable dynamics model, or
+zeroth-order policy optimization.  A differentiable CTM is preferable for the first
+study because it preserves interpretability and reproducibility.
+
+\subsection{On-policy state collection}
+
+Pure behavioral cloning trains on states visited by the oracle, while deployment visits
+states caused by the surrogate's own mistakes.  Use iterative data aggregation:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item train on oracle trajectories;
+  \item roll out the current surrogate;
+  \item query the oracle at selected surrogate-visited states;
+  \item add those labeled states to the dataset;
+  \item repeat until validation decision regret stabilizes.
+\end{enumerate}
+
+Prioritize queries with high uncertainty, large projection corrections, or near-storage
+occupancies.  This uses expensive oracle calls where they provide the most information.
+
+\section{From aggregate flows to driver recommendations}
+
+The model controls aggregate flow, but a navigation service displays paths.  The
+conversion must be defined explicitly.
+
+\subsection{Route-set method}
+
+For each active OD pair and departure interval:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Generate \(K_{\mathrm{path}}\) reasonable loop-free candidate paths using
+  free-flow time, current time, and learned social costs.
+  \item Form the path--movement incidence matrix \(A_k\).
+  \item Find route shares \(\vect{z}_k\) that approximate desired movement flows:
+  \begin{equation}
+    \min_{\vect{z}_k}
+      \|W(A_k\vect{z}_k-\vect{f}_k^{\mathrm{target}})\|_2^2
+      + \lambda_z\|\vect{z}_k-\vect{z}_k^{\mathrm{prev}}\|_2^2,
+    \quad
+    \vect{z}_k\geq0,
+    \quad
+    \vect{1}^{\trans}\vect{z}_k=1.
+    \label{eq:path-decomposition}
+  \end{equation}
+  \item Assign recommendations by randomized or balanced rounding so aggregate route
+  counts follow \(\vect{z}_k\).
+\end{enumerate}
+
+The candidate set limits action complexity but can exclude a socially useful route.
+Report how often expanding \(K_{\mathrm{path}}\) changes the objective.
+
+\subsection{Next-hop sampling method}
+
+Alternatively, use the movement probabilities in \cref{eq:turn-softmax} to sample a
+next hop as vehicles reach decision nodes.  This responds naturally to changing state
+but needs loop prevention and can make a driver's displayed route unstable.  For a
+navigation interface, commit each driver to a route for a minimum interval and reroute
+only when expected improvement exceeds a threshold.
+
+\subsection{Partial control and compliance}
+
+The initial model can assume a controlled fraction \(\rho\) of drivers and route the
+remainder according to UE-like or dynamic shortest-path behavior.  The simulator then
+combines controlled and uncontrolled movement flows.  Different networks may require
+very different controlled fractions to approach SO; optimized-fleet research has
+demonstrated the importance of such penetration thresholds \citep{battifarano2023}.
+Later work should learn compliance as a function of recommended detour and historical
+trust rather than treating \(\rho\) as fixed \citep{jiang2024,yun2024}.
+
+\section{Experimental protocol}
+
+\subsection{Baselines}
+
+Every experiment should include the following where applicable:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item free-flow shortest paths;
+  \item dynamic shortest paths using current estimated travel time;
+  \item static or dynamic user equilibrium;
+  \item static marginal-cost assignment;
+  \item receding-horizon DSO oracle;
+  \item model-predictive control with the same CTM and shorter computational budget;
+  \item classical pressure/backpressure routing or control where definitions align;
+  \item a non-graph multilayer perceptron with comparable parameter count;
+  \item a homogeneous GCN/GRU surrogate;
+  \item the proposed heterograph model without projection;
+  \item the proposed model without decision-focused training;
+  \item an existing dynamic traffic-assignment graph model when a reproducible
+  implementation is available \citep{liu2024hstgsn}.
+\end{enumerate}
+
+Max-pressure and backpressure methods are relevant stability-oriented comparators, but
+their objective is not identical to minimum total travel time.  Classical max-pressure
+analysis also commonly uses point queues with unlimited storage, which should be
+acknowledged when comparing it with spillback-aware CTM control \citep{varaiya2013}.
+
+\subsection{Experiment matrix}
+
+\begin{table}[ht]
+\centering
+\caption{Minimum recommended experiment matrix.}
+\label{tab:experiments}
+\begin{tabularx}{\textwidth}{@{}p{0.09\textwidth}p{0.28\textwidth}X@{}}
+\toprule
+ID & Experiment & Question answered \\
+\midrule
+E0 & Braess and tiny networks & Are UE, SO, conservation, and price-of-anarchy calculations correct? \\
+E1 & Seen topology, new demand & Can the model interpolate across demand profiles? \\
+E2 & Seen topology, extreme demand & Does it remain useful near and beyond capacity? \\
+E3 & Entirely unseen topology & Does it generalize structurally rather than memorize a graph? \\
+E4 & Unseen incidents & How does performance degrade under capacity and reachability shifts? \\
+E5 & CTM-to-SUMO transfer & Does improvement survive microscopic-model mismatch? \\
+E6 & Controlled fraction sweep & How much participation is required for system benefit? \\
+E7 & Network and commodity scaling & What are end-to-end runtime and memory growth? \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+SUMO is an appropriate microscopic evaluation environment and provides routing and
+dynamic-assignment facilities \citep{lopez2018}.  It should be used as an independent
+test environment after CTM training, not tuned until it agrees with the learned model.
+Calibrate broad physical quantities such as free-flow time, capacity, and storage, then
+report the remaining simulator gap.
+
+\subsection{Primary metrics}
+
+\paragraph{System performance.}
+Report total system travel time, mean completed-trip time, median and 95th percentile,
+throughput, unfinished trips, source-queue time, and maximum network accumulation.
+
+\paragraph{Optimality.}
+Report relative oracle gap
+
+\begin{equation}
+  g_J = \frac{J(\pi_\theta)-J(\pi^\star)}
+              {J(\pi^\star)+\varepsilon},
+\end{equation}
+
+the recovered UE--SO gap \(1-\gap(\pi_\theta)\), and solver-bound-aware regret when the
+oracle is not certified optimal.
+
+\paragraph{Feasibility.}
+Report conservation residual, capacity-violation magnitude, invalid-turn rate,
+recirculating flow, demand completion, raw-to-projected action distance, and the number
+of projection failures.
+
+\paragraph{Robustness.}
+Report performance as a function of demand shift, capacity loss, forecast error,
+sensor noise, control delay, and controlled-vehicle fraction.
+
+\paragraph{Computation.}
+Report median, 95th, and 99th percentile wall-clock latency; hardware; batch size;
+memory; graph preprocessing; projection; path decomposition; and end-to-end control
+time.  Comparing only neural forward-pass time with total solver time would be
+misleading.
+
+\paragraph{Fairness and user burden.}
+Even when fairness is not optimized, report the distribution of individual detour
+ratios relative to selfish routing, worst affected OD groups, and the Gini coefficient
+or another predeclared dispersion measure.  System-optimal guidance can improve the
+aggregate while disadvantaging particular users \citep{jahn2005}.
+
+\subsection{Statistical design}
+
+Use common random numbers: every controller should face the same demand, incident, and
+microscopic-driver seeds in a paired comparison.  Predeclare primary metrics and use
+at least enough independent scenarios for interval estimates to stabilize; 30 paired
+seeds per central condition is a reasonable initial target, not a universal rule.
+Report paired mean or median differences with 95\% confidence intervals and effect
+sizes.  Use bootstrap intervals if distributions are strongly skewed.  Treat time
+steps within one simulation as dependent observations, not as thousands of independent
+replicates.  If many secondary hypotheses are tested, distinguish exploratory results
+or control the family-wise error rate.
+
+\section{Implementation roadmap}
+
+\subsection{Phase 0: correctness before learning}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Implement static UE and SO on the Braess and Sioux Falls networks.
+  \item Reproduce analytically checkable parallel-link and Braess examples.
+  \item Verify \cref{eq:gap}: UE maps near one and SO maps near zero.
+  \item Implement CTM conservation and test vehicle counts under no exits, known exits,
+  and oversaturated source demand.
+  \item Solve small DSO problems and compare the optimizer with exhaustive enumeration
+  where possible.
+\end{enumerate}
+
+Do not begin GNN training until these tests pass.  A learned model can conceal errors in
+the simulator or oracle by imitating them accurately.
+
+\subsection{Phase 1: same-topology surrogate}
+
+Train a destination-conditioned GCN/GRU on one network.  Use movement split logits,
+masked softmax, and the exact CTM node allocator.  Demonstrate that it can imitate the
+first oracle action and improve total travel time over dynamic shortest paths on held-out
+demand profiles.  This phase validates the pipeline but is not yet the main novelty.
+
+\subsection{Phase 2: heterogeneous topology-general model}
+
+Add OD tokens, relation-specific message passing, physically normalized features, and
+full topology splits.  Train on synthetic graph families and selected benchmark
+networks.  Tune only on the validation topologies.  Freeze the experiment plan before
+running the final test networks.
+
+\subsection{Phase 3: projection and decision-focused training}
+
+Add the projection in \cref{eq:projection}.  First train it as a postprocessor, then
+differentiate through it if runtime and numerical conditioning permit.  Fine-tune with
+short differentiable CTM rollouts and gradually lengthen the horizon.  Run ablations to
+separate gains from architecture, projection, and decision loss.
+
+\subsection{Phase 4: robustness and independent simulation}
+
+Evaluate incidents, demand shift, noisy forecasts, and partial control.  Transfer the
+frozen controller into SUMO through its traffic-control interface.  SUMO is microscopic
+and continuous, whereas the training CTM is aggregate and discrete; performance loss is
+expected and is itself an important result \citep{lopez2018}.
+
+\subsection{Suggested software organization}
+
+\begin{verbatim}
+project/
+  configs/             # frozen experiment and network configurations
+  data_raw/            # immutable TNTP/OSM inputs and metadata
+  data_processed/      # cell graphs and scenario tensors
+  oracle/              # CTM, DSO formulation, solver adapters
+  models/              # encoders, heterograph GNN, temporal module, decoders
+  projection/          # feasibility layer and numerical tests
+  routing/             # path generation and aggregate-to-driver assignment
+  simulators/          # CTM rollout and SUMO interface
+  experiments/         # training, evaluation, ablation entry points
+  tests/               # conservation, reachability, oracle, and regression tests
+  artifacts/           # versioned tables and figures generated from raw results
+\end{verbatim}
+
+Each saved result should include the source revision, configuration, network hash,
+random seeds, solver version, solver tolerances, hardware, and model checkpoint hash.
+
+\section{Failure modes and diagnostic tests}
+
+\begin{longtable}{@{}p{0.22\textwidth}p{0.35\textwidth}p{0.36\textwidth}@{}}
+\caption{Major failure modes and required diagnostics.}\label{tab:failures}\\
+\toprule
+Failure mode & Why it occurs & Diagnostic or mitigation \\
+\midrule
+\endfirsthead
+\toprule
+Failure mode & Why it occurs & Diagnostic or mitigation \\
+\midrule
+\endhead
+Low flow error, poor travel time & Congestion cost is nonlinear near capacity. & Train and select on rollout objective; stratify error by volume/capacity ratio. \\
+Feasible one-step action, unstable rollout & Small errors compound and shift visited states. & On-policy aggregation, longer rollouts, terminal penalties, stress tests. \\
+Projection does all the work & Raw network outputs ignore physics. & Report raw violations and projection distance; penalize corrections. \\
+Good random split, bad new graph & Scenarios from the same topology leaked into test. & Hold out complete networks before scenario generation. \\
+Source holding artifact & Controller delays entry to reduce in-network occupancy. & Count source queues in TSTT and report admitted demand. \\
+Route cycles & Local next-hop probabilities lack a global destination potential. & Reachability masks, loop penalty, destination potentials, loop-free path decomposition. \\
+Oversmoothing & Deep message passing makes road embeddings indistinguishable. & Residual layers, limited depth, multiscale pooling, OD cross-attention. \\
+Poor long-range OD reasoning & Origin and destination are many physical hops apart. & Virtual OD tokens/links and destination-conditioned decoding. \\
+Oracle imitation ceiling & Oracle uses an inaccurate model or weak time limit. & Certified gaps, multiple solver budgets, SUMO transfer, lower-bound reporting. \\
+Deployment latency hidden & Route generation or projection dominates forward pass. & Report complete pipeline latency and tail percentiles. \\
+Unfair recommendations & SO sacrifices some users for aggregate benefit. & Report detour distributions; later add explicit constraints or rotation. \\
+Control has no effect & Too few users accept recommendations. & Sweep controlled fraction and model compliance in extension experiments. \\
+\bottomrule
+\end{longtable}
+
+\section{Ablation and claim discipline}
+
+The final paper should align every claim with an experiment:
+
+\begin{table}[ht]
+\centering
+\caption{Claims and minimum supporting evidence.}
+\label{tab:claims}
+\begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}X@{}}
+\toprule
+Claim & Minimum evidence \\
+\midrule
+Near-system-optimal & Oracle-relative objective gaps with solver certification or bounds on all reported test scenarios. \\
+Faster & End-to-end latency including preprocessing, projection, and route generation on identical hardware assumptions. \\
+Physics-constrained & Hard feasibility or explicit residual distributions before and after projection. \\
+Topology-generalizing & Entire road networks excluded from training and hyperparameter selection. \\
+Dynamic & Closed-loop, time-dependent demand and queue propagation; not merely independent static snapshots. \\
+Robust & Predeclared demand, incident, and observation shifts with degradation curves. \\
+Scalable & Runtime and memory curves over network size and active commodities. \\
+Improves price of anarchy & Same demand and feasible set for UE, learned policy, and SO; report \cref{eq:gap}. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Avoid saying the model ``finds the optimal route for all drivers.''  The system optimum
+minimizes an aggregate objective and may lengthen some individual trips.  Say instead
+that the model \emph{approximates a dynamic system-optimal aggregate routing policy}
+under a stated demand, compliance, and traffic model.
+
+\section{Proposed hypotheses and decision criteria}
+
+The following hypotheses are specific enough to preregister:
+
+\begin{description}[leftmargin=1.6in,style=nextline]
+  \item[H1: decision quality]
+  On held-out demand profiles for seen topologies, the projected GNN has lower TSTT than
+  dynamic shortest-path and UE baselines and a small oracle-relative gap.
+  \item[H2: topology transfer]
+  On completely unseen topologies, physically normalized heterogeneous features and OD
+  tokens reduce the oracle-relative gap compared with a homogeneous GCN baseline.
+  \item[H3: feasibility]
+  Projection eliminates operational constraint violations, while decision-focused
+  training reduces the average projection correction relative to imitation alone.
+  \item[H4: robustness]
+  Incident-augmented training reduces performance degradation on unseen incidents
+  without materially degrading nominal performance.
+  \item[H5: computational value]
+  The surrogate's end-to-end decision latency grows more slowly in practice than
+  repeatedly solving the selected DSO oracle at matched solution quality.
+\end{description}
+
+Illustrative success criteria for continuing to a larger study are: (i) less than
+5--10\% median oracle-relative TSTT gap on held-out scenarios, (ii) a substantial
+reduction of the UE--SO gap, (iii) zero post-projection hard violations, (iv) useful
+performance on at least one unseen topology, and (v) a clear end-to-end latency
+advantage.  These thresholds should be revised based on pilot solver accuracy and
+network difficulty before final preregistration.
+
+\section{Extensions beyond the first paper}
+
+\subsection{Lyapunov-shielded routing}
+
+A follow-up can combine the surrogate with a stability-oriented controller.  For queue
+state \(\vect{q}(t)\), define a Lyapunov function such as
+
+\begin{equation}
+  L(\vect{q}(t)) = \frac{1}{2}\sum_i w_i q_i(t)^2
+\end{equation}
+
+or a barrier-like spillback term that grows as occupancy approaches storage.  A safety
+layer can restrict neural actions to those satisfying an upper bound on estimated
+Lyapunov drift.  Backpressure and max-pressure traffic control provide relevant
+stability foundations \citep{varaiya2013,gregoire2014,zaidi2016}.  The important new
+question would be whether a learned correction improves delay without sacrificing a
+stated stability region.
+
+\subsection{Fairness and learned compliance}
+
+Another extension treats the platform as a leader and drivers as probabilistic
+followers.  Compliance may depend on recommended detour, trust, and incentives.  The
+controller can minimize TSTT subject to per-user or per-group detour constraints.
+Constrained system-optimal routing is an established fairness foundation
+\citep{jahn2005}; the new work would need dynamic, learned behavior and long-run trust.
+
+\subsection{Learned tolls or information design}
+
+Rather than issuing prescriptive routes, the GNN can output link tolls, credits, or
+information signals intended to induce socially beneficial equilibrium.  This is more
+incentive-compatible but introduces a bilevel equilibrium problem and distributional
+questions about who pays.  It should not be mixed into the initial surrogate paper.
+
+\section{Conclusion}
+
+A graph neural surrogate for DSO-DTA is technically plausible and potentially useful
+because expensive optimization can be shifted offline while fast graph-based inference
+is used online.  The project is publishable only if it goes beyond flow prediction.
+The model must be evaluated as a constrained decision system: it should approximate
+dynamic system-optimal actions, preserve vehicle conservation and capacity limits,
+generalize to entirely unseen networks and disruptions, and demonstrate a true
+end-to-end computational advantage.  A CTM oracle, heterogeneous OD-aware graph,
+feasibility projection, decision-focused fine-tuning, and topology-held-out evaluation
+form a coherent path to that goal.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

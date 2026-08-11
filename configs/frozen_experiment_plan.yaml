@@ -1,0 +1,64 @@
+plan_version: 1
+frozen: true
+frozen_date: 2026-08-11
+paired_seeds: 30
+topology_splits:
+  train: [synthetic_grid_3x3, synthetic_diamond, sioux_falls]
+  validation: [synthetic_grid_4x4, eastern_massachusetts]
+  test: [anaheim, winnipeg]
+primary_metrics:
+  - total_system_travel_time
+  - oracle_relative_gap
+  - recovered_ue_so_gap
+  - conservation_residual
+  - capacity_violation
+  - end_to_end_latency
+secondary_metrics:
+  - median_trip_time
+  - p95_trip_time
+  - throughput
+  - unfinished_trips
+  - source_queue_time
+  - maximum_accumulation
+  - invalid_turn_rate
+  - recirculating_flow
+  - raw_to_projected_distance
+  - projection_failures
+  - memory
+  - fairness_detour_ratio
+  - fairness_gini
+hypotheses: [H1_decision_quality, H2_topology_transfer, H3_feasibility, H4_robustness, H5_computational_value]
+experiments:
+  - {id: E0, name: correctness, networks: [braess, analytic_parallel, tiny_grid]}
+  - {id: E1, name: seen_topology_new_demand, networks: [sioux_falls]}
+  - {id: E2, name: seen_topology_extreme_demand, regimes: [near_capacity, oversaturated]}
+  - {id: E3, name: entirely_unseen_topology, networks: [anaheim, winnipeg]}
+  - {id: E4, name: unseen_incidents, incident_sets: [unfamiliar_location, outside_severity, multiple, closure, noisy_duration]}
+  - {id: E5, name: ctm_to_sumo_transfer, tune_in_sumo: false}
+  - {id: E6, name: controlled_fraction_sweep, fractions: [0.0, 0.25, 0.5, 0.75, 1.0]}
+  - {id: E7, name: network_and_commodity_scaling, report: [runtime, memory, preprocessing, projection, path_decomposition]}
+baselines:
+  - free_flow_shortest_path
+  - dynamic_shortest_path
+  - user_equilibrium
+  - static_marginal_cost
+  - receding_horizon_dso
+  - short_budget_mpc
+  - backpressure
+  - local_mlp
+  - homogeneous_gcn_gru
+  - heterograph_without_projection
+  - heterograph_without_decision_training
+  - external_dynamic_graph_model_if_reproducible
+statistics:
+  design: paired_common_random_numbers
+  confidence: 0.95
+  interval: paired_bootstrap_for_skewed_distributions
+  within_simulation_steps_independent: false
+  multiple_testing: label_exploratory_or_control_family_wise_error
+success_targets:
+  median_oracle_relative_gap: 0.10
+  post_projection_hard_violations: 0
+  unseen_topology_useful: true
+  end_to_end_latency_advantage: true
+

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnn-dso-routing"
+version = "0.1.0"
+description = "Physics-constrained graph neural surrogate for dynamic system-optimal traffic assignment"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0,<3",
+  "scipy>=1.14,<2",
+  "networkx>=3.4,<4",
+  "torch>=2.5,<3",
+  "PyYAML>=6,<7",
+  "cvxpy>=1.6,<2",
+  "osqp>=1,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+sumo = ["traci>=1.20"]
+
+[project.scripts]
+gnn-dso = "experiments.run:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["oracle*", "models*", "projection*", "routing*", "simulators*", "experiments*", "data_raw*", "data_processed*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
