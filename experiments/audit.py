@@ -40,6 +40,8 @@ REQUIREMENTS = (
     Requirement("SCALING", "Network/commodity runtime and memory curves", "experiments/scaling.py", "tests/test_heterogeneous.py"),
     Requirement("REPRO", "Revision/config/network/seeds/solver/hardware/checkpoint metadata", "experiments/metadata.py", "tests/test_metrics_matrix_metadata.py"),
     Requirement("SUMO", "Frozen-controller TraCI transfer adapter", "simulators/sumo_adapter.py", "tests/test_sumo_adapter.py", "implemented; external run blocked by absent SUMO binary/network"),
+    Requirement("REAL-EXAMPLE", "End-to-end Sioux Falls GNN walkthrough", "examples/sioux_falls_gnn.py", "tests/test_real_example.py"),
+    Requirement("VISUALIZATION", "Coordinate-file import, traced GNN evaluation, and Folium result map", "visualization/cli.py", "tests/test_folium_visualization.py"),
     Requirement("CLAIMS", "Claim-to-evidence and failure-mode audits", "experiments/audit.py", "full pytest suite"),
 )
 

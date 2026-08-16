@@ -16,6 +16,7 @@ from experiments.phase1 import run_phase1_smoke, write_phase1_result
 from experiments.phase2 import run_phase2_smoke, write_phase2_result
 from experiments.phase3 import run_phase3_smoke, write_phase3_result
 from experiments.phase4 import run_phase4_smoke, write_phase4_result
+from examples.sioux_falls_gnn import run_example
 
 
 def _print(result) -> None:
@@ -26,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gnn-dso")
     parser.add_argument(
         "command",
-        choices=("phase0", "phase1", "phase2", "phase3", "phase4", "all-smoke", "matrix", "audit", "test"),
+        choices=("phase0", "phase1", "phase2", "phase3", "phase4", "real-example", "all-smoke", "matrix", "audit", "test"),
     )
     args = parser.parse_args(argv)
     runs = Path("artifacts/runs")
@@ -40,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_phase3_smoke(); write_phase3_result(result, runs / "phase3_smoke.json"); _print(result)
     elif args.command == "phase4":
         result = run_phase4_smoke(); write_phase4_result(result, runs / "phase4_smoke.json"); _print(result)
+    elif args.command == "real-example":
+        result, _ = run_example(); _print(result)
     elif args.command == "all-smoke":
         results = [run_phase0(), run_phase1_smoke(), run_phase2_smoke(), run_phase3_smoke(), run_phase4_smoke()]
         writers = [write_phase0_result, write_phase1_result, write_phase2_result, write_phase3_result, write_phase4_result]
@@ -63,4 +66,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

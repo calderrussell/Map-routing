@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "name": "cambridge_mit_kendall",
+  "attribution": "Road names and WGS84 coordinates derived from OpenStreetMap contributors; topology simplified for a reproducible teaching example (ODbL).",
+  "defaults": {
+    "capacity": 7.0,
+    "storage": 36.0,
+    "free_speed": 0.8,
+    "wave_speed": 0.35,
+    "free_time": 1.0,
+    "lanes": 1.0,
+    "road_class": "tertiary"
+  },
+  "nodes": [
+    {"id": "vassar_west", "lat": 42.3591850, "lon": -71.0968347, "label": "Vassar Street west"},
+    {"id": "mass_vassar", "lat": 42.3601506, "lon": -71.0948847, "label": "Massachusetts Ave / Vassar St"},
+    {"id": "mass_albany", "lat": 42.3608275, "lon": -71.0960005, "label": "Massachusetts Ave / Albany St"},
+    {"id": "albany_main", "lat": 42.3628543, "lon": -71.0920014, "label": "Albany St / Main St"},
+    {"id": "main_vassar", "lat": 42.3627194, "lon": -71.0899422, "label": "Main St / Vassar St"},
+    {"id": "ames_main", "lat": 42.3625829, "lon": -71.0882069, "label": "Ames St / Main St"},
+    {"id": "ames_broadway", "lat": 42.3639678, "lon": -71.0874881, "label": "Ames St / Broadway"},
+    {"id": "galileo_broadway", "lat": 42.3644765, "lon": -71.0894411, "label": "Galileo Galilei Way / Broadway"},
+    {"id": "main_east", "lat": 42.3624164, "lon": -71.0859752, "label": "Main Street east"}
+  ],
+  "roads": [
+    {
+      "id": "vassar_west_leg",
+      "name": "Vassar Street",
+      "source": "vassar_west",
+      "target": "mass_vassar",
+      "geometry": [[42.3591850, -71.0968347], [42.3596634, -71.0958478], [42.3598744, -71.0954247], [42.3601506, -71.0948847]],
+      "capacity": 8.0,
+      "storage": 44.0,
+      "road_class": "secondary"
+    },
+    {
+      "id": "mass_connector",
+      "name": "Massachusetts Avenue",
+      "source": "mass_vassar",
+      "target": "mass_albany",
+      "geometry": [[42.3601506, -71.0948847], [42.3604384, -71.0953548], [42.3608275, -71.0960005]],
+      "capacity": 9.0,
+      "storage": 32.0,
+      "road_class": "primary"
+    },
+    {
+      "id": "albany_north",
+      "name": "Albany Street",
+      "source": "mass_albany",
+      "target": "albany_main",
+      "geometry": [[42.3608275, -71.0960005], [42.3616701, -71.0941414], [42.3628543, -71.0920014]],
+      "capacity": 7.0,
+      "storage": 48.0,
+      "free_time": 1.3,
+      "road_class": "secondary"
+    },
+    {
+      "id": "main_west",
+      "name": "Main Street",
+      "source": "albany_main",
+      "target": "main_vassar",
+      "geometry": [[42.3628543, -71.0920014], [42.3628055, -71.0913494], [42.3627639, -71.0907938], [42.3627194, -71.0899422]],
+      "capacity": 9.0,
+      "storage": 42.0,
+      "road_class": "primary"
+    },
+    {
+      "id": "vassar_diagonal",
+      "name": "Vassar Street",
+      "source": "mass_vassar",
+      "target": "main_vassar",
+      "geometry": [[42.3601506, -71.0948847], [42.3607260, -71.0937097], [42.3612795, -71.0925619], [42.3618092, -71.0915035], [42.3623042, -71.0905736], [42.3627194, -71.0899422]],
+      "capacity": 8.0,
+      "storage": 58.0,
+      "free_time": 1.8,
+      "road_class": "secondary"
+    },
+    {
+      "id": "main_incident_link",
+      "name": "Main Street",
+      "source": "main_vassar",
+      "target": "ames_main",
+      "geometry": [[42.3627194, -71.0899422], [42.3627118, -71.0892129], [42.3625829, -71.0882069]],
+      "capacity": 9.0,
+      "storage": 34.0,
+      "road_class": "primary"
+    },
+    {
+      "id": "galileo_north",
+      "name": "Galileo Galilei Way",
+      "source": "main_vassar",
+      "target": "galileo_broadway",
+      "geometry": [[42.3627194, -71.0899422], [42.3633357, -71.0898491], [42.3638798, -71.0896019], [42.3644765, -71.0894411]],
+      "capacity": 6.0,
+      "storage": 42.0,
+      "free_time": 1.4
+    },
+    {
+      "id": "broadway_west",
+      "name": "Broadway",
+      "source": "galileo_broadway",
+      "target": "ames_broadway",
+      "geometry": [[42.3644765, -71.0894411], [42.3647900, -71.0894028], [42.3639678, -71.0874881]],
+      "capacity": 8.0,
+      "storage": 38.0,
+      "free_time": 1.3,
+      "road_class": "primary"
+    },
+    {
+      "id": "ames_north",
+      "name": "Ames Street",
+      "source": "ames_main",
+      "target": "ames_broadway",
+      "geometry": [[42.3625829, -71.0882069], [42.3630533, -71.0881606], [42.3635339, -71.0878268], [42.3639678, -71.0874881]],
+      "capacity": 6.0,
+      "storage": 34.0
+    },
+    {
+      "id": "main_east_leg",
+      "name": "Main Street",
+      "source": "ames_main",
+      "target": "main_east",
+      "geometry": [[42.3625829, -71.0882069], [42.3625110, -71.0873310], [42.3624465, -71.0863429], [42.3624164, -71.0859752]],
+      "capacity": 9.0,
+      "storage": 45.0,
+      "road_class": "primary"
+    }
+  ],
+  "od_pairs": [
+    {"id": "mit_to_kendall", "origin_node": "vassar_west", "destination_node": "main_east", "base_demand": 4.2},
+    {"id": "kendall_to_mass_ave", "origin_node": "main_east", "destination_node": "mass_albany", "base_demand": 2.6}
+  ],
+  "scenario": {
+    "id": "cambridge_event_with_main_street_incident",
+    "horizon": 18,
+    "seed": 47,
+    "regime": "event",
+    "forecast_noise": 0.12,
+    "incidents": [
+      {
+        "road_ids": ["main_incident_link"],
+        "start": 6,
+        "duration": 6,
+        "capacity_multiplier": 0.2,
+        "speed_multiplier": 0.45,
+        "kind": "unfamiliar_location"
+      }
+    ]
+  }
+}

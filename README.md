@@ -47,9 +47,30 @@ For SUMO transfer, install SUMO separately and then install the optional TraCI e
 .venv/bin/python -m experiments.run phase2
 .venv/bin/python -m experiments.run phase3
 .venv/bin/python -m experiments.run phase4
+.venv/bin/python -m experiments.run real-example
 .venv/bin/python -m experiments.run all-smoke
 .venv/bin/python -m experiments.run test
 ```
+
+### Interactive map result
+
+Run a compact GNN training/evaluation on the bundled Cambridge/MIT street graph and
+write an interactive Folium result map:
+
+```bash
+.venv/bin/gnn-dso-map --train-demo \
+  --graph examples/graphs/cambridge_mit.json \
+  --output artifacts/runs/cambridge_gnn_map.html \
+  --save-checkpoint artifacts/runs/cambridge_gnn.pt
+```
+
+Open `artifacts/runs/cambridge_gnn_map.html` in a browser. The map shows directed road
+cells, OD endpoints, the incident, maximum congestion, routed volume, a time-slider
+replay, and a hidden comparison layer for dynamic shortest paths. It also writes a
+JSON summary beside the HTML. To test an existing topology-general checkpoint instead
+of doing the small teaching run, replace `--train-demo` with `--checkpoint MODEL.pt`.
+See [`docs/folium_visualization.md`](docs/folium_visualization.md) for the graph JSON
+schema and interpretation notes.
 
 The frozen protocol is [`configs/frozen_experiment_plan.yaml`](configs/frozen_experiment_plan.yaml).
 It assigns entire topologies before scenario generation, includes all E0–E7 conditions,
@@ -68,6 +89,7 @@ projection/          exact QP and differentiable feasibility layers
 routing/             K paths, path decomposition, rounding, compliance
 simulators/          NumPy/PyTorch CTM and SUMO/TraCI adapter
 experiments/         training, DAgger, evaluation, metrics, phases, CLI
+visualization/       geographic graph loader, traced evaluation, Folium renderer
 tests/               correctness, leakage, projection, model and integration tests
 artifacts/           milestone and final compliance audits
 specification/       recovered authoritative LaTeX design and bibliography
@@ -77,3 +99,17 @@ See [`docs/implementation_spec.md`](docs/implementation_spec.md) for the equatio
 map and the milestone audit files in [`artifacts/`](artifacts/README.md) for evidence and
 claim boundaries.
 
+## Worked real-network example
+
+[`examples/sioux_falls_gnn.py`](examples/sioux_falls_gnn.py) demonstrates the full
+workflow on the canonical 24-intersection/76-link Sioux Falls transportation network:
+road links become CTM cells, three OD tokens receive time-varying demand, the DSO oracle
+generates demonstrations, the heterogeneous GNN is trained, and both the GNN and
+dynamic shortest paths face a held-out demand peak plus an incident on link 10→15.
+
+```bash
+.venv/bin/python examples/sioux_falls_gnn.py
+```
+
+The accompanying [`examples/README.md`](examples/README.md) explains each API call and
+how to move from the quick teaching run to the frozen research protocol.

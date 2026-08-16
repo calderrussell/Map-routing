@@ -95,7 +95,7 @@ class RecedingHorizonOracle:
                 torch.nn.utils.clip_grad_norm_([logits], 10.0)
                 optimizer.step()
                 value = float(objective.detach())
-                if abs(last - value) <= 1e-7 * max(abs(last), 1.0):
+                if np.isfinite(last) and abs(last - value) <= 1e-7 * max(abs(last), 1.0):
                     break
                 last = value
             with torch.no_grad():
@@ -174,4 +174,3 @@ class ExhaustiveTinyOracle:
             primal_residual=0.0,
         )
         return OracleResult(best_actions[0], best_actions, best_cost, diagnostics)
-

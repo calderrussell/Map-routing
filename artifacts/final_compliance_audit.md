@@ -2,7 +2,7 @@
 
 Authoritative specification: `specification/gnn_dso_model.tex`.
 
-Full verification result: **29 passed in 8.44s**, plus a successful installed `gnn-dso all-smoke` run.
+Full verification result: **34 passed in 9.57s**, plus successful installed `gnn-dso all-smoke`, Sioux Falls example, and Cambridge Folium command runs.
 
 | ID | Requirement | Implementation | Verification | Status |
 |---|---|---|---|---|
@@ -32,6 +32,8 @@ Full verification result: **29 passed in 8.44s**, plus a successful installed `g
 | SCALING | Network/commodity runtime and memory curves | `experiments/scaling.py` | `tests/test_heterogeneous.py` | implemented |
 | REPRO | Revision/config/network/seeds/solver/hardware/checkpoint metadata | `experiments/metadata.py` | `tests/test_metrics_matrix_metadata.py` | implemented |
 | SUMO | Frozen-controller TraCI transfer adapter | `simulators/sumo_adapter.py` | `tests/test_sumo_adapter.py` | implemented; external run blocked by absent SUMO binary/network |
+| REAL-EXAMPLE | End-to-end Sioux Falls GNN walkthrough | `examples/sioux_falls_gnn.py` | `tests/test_real_example.py` | implemented |
+| VISUALIZATION | Coordinate-file import, traced GNN evaluation, and Folium result map | `visualization/cli.py` | `tests/test_folium_visualization.py` | implemented |
 | CLAIMS | Claim-to-evidence and failure-mode audits | `experiments/audit.py` | `full pytest suite` | implemented |
 
 ## Milestone re-audits
@@ -41,10 +43,10 @@ Full verification result: **29 passed in 8.44s**, plus a successful installed `g
 - Phase 2: training and validation topology hashes were disjoint; the variable-size heterograph produced zero illegal flow on the unseen topology.
 - Phase 3: OSQP projection was optimal; post-projection violation was 1.06e-7; raw violation and projection correction fell substantially after decision-focused tuning.
 - Phase 4: E0–E7, 30 paired seeds, 22 robustness conditions, partial-control sweep, route assignment, statistics, metadata, and the TraCI bridge passed integration checks.
+- Visualization: the stored Cambridge/MIT geographic graph imported as 20 directed CTM cells and 32 movements; the GNN/baseline trace, Folium layers, time slider, JSON summary, and checkpoint round trip passed.
 
 ## Empirical claim boundary
 
 The checked-in smoke results validate software correctness and integration. They do not constitute the full 30-seed, held-out benchmark/SUMO study. Near-system-optimality, topology superiority, robustness, scalability, and microscopic-transfer claims must be made only after the frozen E0–E7 plan is executed on the named external benchmark data and SUMO environment.
 
 The local gradient DSO oracle is explicitly uncertified. Only `ExhaustiveTinyOracle` outputs are labeled certified. Projection, path decomposition, and end-to-end timings are separately exposed. A real E5 transfer remains externally blocked because SUMO and a calibrated SUMO network are not installed; the adapter and fake-TraCI contract are tested.
-

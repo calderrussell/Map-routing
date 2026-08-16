@@ -31,7 +31,9 @@ class EvaluationResult:
     end_to_end_seconds: float
 
 
-def _incident_arrays(simulator: CTMSimulator, scenario: Scenario, time_index: int):
+def incident_arrays(simulator: CTMSimulator, scenario: Scenario, time_index: int):
+    """Return the physical incident multipliers active at one simulation interval."""
+
     network = simulator.network
     cap = np.ones(network.n_cells)
     speed = np.ones(network.n_cells)
@@ -44,6 +46,10 @@ def _incident_arrays(simulator: CTMSimulator, scenario: Scenario, time_index: in
                 if incident.capacity_multiplier == 0:
                     disabled |= (network.movement_sources == cell) | (network.movement_targets == cell)
     return cap, speed, disabled
+
+
+# Kept for callers written before the public visualization/trace interface existed.
+_incident_arrays = incident_arrays
 
 
 def evaluate_controller(
@@ -64,7 +70,7 @@ def evaluate_controller(
     started_all = time.perf_counter()
     for time_index, realized in enumerate(scenario.realized_demand):
         started = time.perf_counter()
-        cap, speed, disabled = _incident_arrays(simulator, scenario, time_index)
+        cap, speed, disabled = incident_arrays(simulator, scenario, time_index)
         preprocess_total += time.perf_counter() - started
         forecast = scenario.forecast_demand[time_index:]
         policy_started = time.perf_counter()
@@ -102,4 +108,3 @@ def evaluate_controller(
         route_decomposition_seconds=route_decomposition_seconds,
         end_to_end_seconds=end_to_end,
     )
-

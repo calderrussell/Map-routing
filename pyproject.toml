@@ -16,6 +16,7 @@ dependencies = [
   "PyYAML>=6,<7",
   "cvxpy>=1.6,<2",
   "osqp>=1,<2",
+  "folium>=0.20,<0.21",
 ]
 
 [project.optional-dependencies]
@@ -24,12 +25,12 @@ sumo = ["traci>=1.20"]
 
 [project.scripts]
 gnn-dso = "experiments.run:main"
+gnn-dso-map = "visualization.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["oracle*", "models*", "projection*", "routing*", "simulators*", "experiments*", "data_raw*", "data_processed*"]
+include = ["oracle*", "models*", "projection*", "routing*", "simulators*", "experiments*", "examples*", "visualization*", "data_raw*", "data_processed*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-
